@@ -9,7 +9,9 @@ import BattleArena from './pages/BattleArena';
 import Rankings from './pages/Rankings';
 import Profile from './pages/Profile';
 import Discuss from './pages/Discuss';
-import { Roadmaps, Chats, Vault, Settings } from './pages/Stubs';
+import Vault from './pages/Vault';
+import Roadmaps from './pages/Roadmaps';
+import { Chats, Settings } from './pages/Stubs';
 import { DashboardLayout } from './components/DashboardLayout';
 
 // Route Guard for Protected Routes

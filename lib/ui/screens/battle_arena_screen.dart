@@ -36,6 +36,7 @@ class _BattleArenaScreenState extends State<BattleArenaScreen> with TickerProvid
   String? _battleResult;
 
   StreamSubscription? _battleSub;
+  StreamSubscription? _chatSub;
   late AnimationController _resultController;
 
   @override
@@ -48,9 +49,25 @@ class _BattleArenaScreenState extends State<BattleArenaScreen> with TickerProvid
 
     if (widget.battleId != null) {
       _listenToLiveProgress();
+      _listenToChat();
     } else {
       _simulateOpponentProgress();
     }
+  }
+
+  void _listenToChat() {
+    if (widget.battleId == null) return;
+    _chatSub = BattleService.getBattleMessages(widget.battleId!).listen((msgs) {
+      if (!mounted) return;
+      setState(() {
+        _chatMessages.clear();
+        _chatMessages.addAll(msgs.map((m) {
+          final isMe = m['sender_id'] == AuthService.currentUser?.uid;
+          final sender = isMe ? 'You' : 'Opponent';
+          return "$sender: ${m['text']}";
+        }));
+      });
+    });
   }
 
   void _listenToLiveProgress() {
@@ -145,6 +162,7 @@ class _BattleArenaScreenState extends State<BattleArenaScreen> with TickerProvid
   void dispose() {
     _timer.cancel();
     _battleSub?.cancel();
+    _chatSub?.cancel();
     _chatController.dispose();
     _resultController.dispose();
     super.dispose();
@@ -173,7 +191,7 @@ class _BattleArenaScreenState extends State<BattleArenaScreen> with TickerProvid
                         ],
                       ),
                     ),
-                    _buildChatPanel(),
+                    if (_battleResult == null) _buildChatPanel(),
                   ],
                 ),
               ),
@@ -325,8 +343,8 @@ class _BattleArenaScreenState extends State<BattleArenaScreen> with TickerProvid
               controller: _chatController,
               decoration: InputDecoration(hintText: 'Type...', hintStyle: const TextStyle(fontSize: 12), filled: true, fillColor: Colors.white.withValues(alpha: 0.05)),
               onSubmitted: (val) {
-                if (val.trim().isNotEmpty) {
-                  setState(() => _chatMessages.add('You: ${val.trim()}'));
+                if (val.trim().isNotEmpty && widget.battleId != null) {
+                  BattleService.sendChatMessage(widget.battleId!, val.trim());
                   _chatController.clear();
                 }
               },
@@ -344,27 +362,43 @@ class _BattleArenaScreenState extends State<BattleArenaScreen> with TickerProvid
     return FadeTransition(
       opacity: _resultController,
       child: Container(
-        color: Colors.black.withValues(alpha: 0.9),
-        child: Center(
-          child: ScaleTransition(
-            scale: CurvedAnimation(parent: _resultController, curve: Curves.elasticOut),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(isWin ? Icons.emoji_events : Icons.heart_broken, color: color, size: 120),
-                const SizedBox(height: 24),
-                Text(_battleResult!, style: TextStyle(color: color, fontSize: 60, fontWeight: FontWeight.bold, letterSpacing: 8)),
-                const SizedBox(height: 12),
-                Text(isWin ? 'ARENA CONQUERED' : 'BATTLE LOST', style: const TextStyle(color: Colors.white38, letterSpacing: 4)),
-                const SizedBox(height: 60),
-                ElevatedButton(
-                  onPressed: () => Navigator.pop(context),
-                  style: ElevatedButton.styleFrom(backgroundColor: color, padding: const EdgeInsets.symmetric(horizontal: 48, vertical: 20)),
-                  child: const Text('RETURN TO BASE', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+        color: Colors.black.withValues(alpha: 0.95),
+        child: Row(
+          children: [
+            // Left Side: Banner
+            Expanded(
+              child: Center(
+                child: ScaleTransition(
+                  scale: CurvedAnimation(parent: _resultController, curve: Curves.elasticOut),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(isWin ? Icons.emoji_events : Icons.heart_broken, color: color, size: 100),
+                      const SizedBox(height: 24),
+                      Text(_battleResult!, style: TextStyle(color: color, fontSize: 50, fontWeight: FontWeight.bold, letterSpacing: 8)),
+                      const SizedBox(height: 12),
+                      Text(isWin ? 'ARENA CONQUERED' : 'BATTLE LOST', style: const TextStyle(color: Colors.white38, letterSpacing: 4)),
+                      const SizedBox(height: 48),
+                      ElevatedButton(
+                        onPressed: () => Navigator.pop(context),
+                        style: ElevatedButton.styleFrom(backgroundColor: color, padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 18)),
+                        child: const Text('RETURN TO BASE', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                      ),
+                    ],
+                  ),
                 ),
-              ],
+              ),
             ),
-          ),
+            
+            const VerticalDivider(color: Colors.white10, width: 1),
+
+            // Right Side: Post Battle Chat
+            Container(
+              width: 320,
+              color: AppColors.sidebarBackground,
+              child: _buildChatPanel(),
+            ),
+          ],
         ),
       ),
     );

@@ -4,6 +4,8 @@ import Editor from '@monaco-editor/react';
 import { fetchProblemDetails } from '../services/problemDescriptionService';
 import { executeCode, type ExecutionResult } from '../services/codeExecutionService';
 import { importCompanyProblems, type Problem } from '../services/githubService';
+import { db, auth } from '../firebase';
+import { addDoc, collection, serverTimestamp } from 'firebase/firestore';
 
 const ProblemEditor: React.FC = () => {
   const { company, id } = useParams<{ company: string; id: string }>();
@@ -103,6 +105,23 @@ const ProblemEditor: React.FC = () => {
     setExecuting(false);
   };
 
+  const handleSubmit = async () => {
+    if (!auth.currentUser || !problemMeta) return;
+    try {
+      await addDoc(collection(db, "submissions"), {
+        uid: auth.currentUser.uid,
+        title: problemMeta.title,
+        language: language,
+        code: code,
+        timestamp: serverTimestamp(),
+      });
+      alert("✅ Solution stored in Vault successfully!");
+    } catch (e) {
+      console.error("Save failed:", e);
+      alert("❌ Failed to save submission.");
+    }
+  };
+
   if (isLoading) return <div style={{ padding: '40px', textAlign: 'center' }}>Loading Workspace Environments...</div>;
 
   return (
@@ -126,8 +145,11 @@ const ProblemEditor: React.FC = () => {
             <option value="cpp" style={{ background: '#1a1a1a', color: 'white' }}>C++</option>
             <option value="java" style={{ background: '#1a1a1a', color: 'white' }}>Java</option>
           </select>
-          <button className="accent-button" style={{ padding: '6px 16px', fontSize: '13px' }} onClick={handleRun} disabled={executing}>
+          <button className="accent-button" style={{ padding: '6px 16px', fontSize: '13px', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--glass-border)', color: 'white' }} onClick={handleRun} disabled={executing}>
             {executing ? 'Running...' : 'Run Code'}
+          </button>
+          <button className="accent-button" style={{ padding: '6px 16px', fontSize: '13px', background: 'rgba(0, 209, 255, 0.1)', color: 'var(--accent-blue)', border: '1px solid rgba(0, 209, 255, 0.3)' }} onClick={handleSubmit}>
+            Submit
           </button>
         </div>
       </div>

@@ -194,4 +194,46 @@ class BattleService {
       return _db.collection('battles').doc(battleId).snapshots().map((doc) => doc.data());
     }
   }
+
+  /// Sends a message into battle sub-collection
+  static Future<void> sendChatMessage(String battleId, String message) async {
+    final uid = AuthService.currentUser?.uid;
+    if (uid == null) return;
+    
+    final messageData = {
+      'sender_id': uid,
+      'text': message,
+      'timestamp': Platform.isLinux ? DateTime.now().toIso8601String() : fb_store.FieldValue.serverTimestamp(),
+    };
+
+    if (Platform.isLinux) {
+      await AuthService.firedartDb.collection('battles').document(battleId).collection('messages').add(messageData);
+    } else {
+      await _db.collection('battles').doc(battleId).collection('messages').add(messageData);
+    }
+  }
+
+  /// Streams messages from battle sub-collection
+  static Stream<List<Map<String, dynamic>>> getBattleMessages(String battleId) {
+    if (Platform.isLinux) {
+      return AuthService.firedartDb.collection('battles').document(battleId).collection('messages').stream.map((docs) {
+        final msgs = docs.map((d) {
+          final m = Map<String, dynamic>.from(d.map);
+          m['id'] = d.id;
+          return m;
+        }).toList();
+        // Simple client sort
+        msgs.sort((a, b) => (a['timestamp'] ?? '').compareTo(b['timestamp'] ?? ''));
+        return msgs;
+      });
+    } else {
+      return _db.collection('battles').doc(battleId).collection('messages').orderBy('timestamp').snapshots().map((snap) {
+        return snap.docs.map((d) {
+          final m = d.data() as Map<String, dynamic>;
+          m['id'] = d.id;
+          return m;
+        }).toList();
+      });
+    }
+  }
 }
