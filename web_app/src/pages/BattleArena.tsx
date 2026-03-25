@@ -22,7 +22,6 @@ const BattleArena: React.FC = () => {
   const [isJoiningVoice, setIsJoiningVoice] = useState(false);
   const peerRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
-  const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
 
   const uid = auth.currentUser?.uid;
 

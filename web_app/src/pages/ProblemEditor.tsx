@@ -4,8 +4,10 @@ import Editor from '@monaco-editor/react';
 import { fetchProblemDetails } from '../services/problemDescriptionService';
 import { executeCode, type ExecutionResult } from '../services/codeExecutionService';
 import { importCompanyProblems, type Problem } from '../services/githubService';
+import { fetchCustomProblemsByCompany } from '../services/customQuestionService';
 import { db, auth } from '../firebase';
-import { addDoc, collection, serverTimestamp } from 'firebase/firestore';
+import { addDoc, collection, serverTimestamp, doc, setDoc, deleteDoc, getDoc, query, where, getDocs, orderBy, limit } from 'firebase/firestore';
+import { Bookmark as BookmarkIcon } from 'lucide-react';
 
 const ProblemEditor: React.FC = () => {
   const { company, id } = useParams<{ company: string; id: string }>();
@@ -13,49 +15,97 @@ const ProblemEditor: React.FC = () => {
 
   const [problemMeta, setProblemMeta] = useState<Problem | null>(null);
   const [description, setDescription] = useState<string>('');
-  const [sampleTestCase, setSampleTestCase] = useState<string>('');
   const [testcaseCases, setTestcaseCases] = useState<string[]>([]);
   const [expectedOutputs, setExpectedOutputs] = useState<string[]>([]);
   const [selectedCaseIndex, setSelectedCaseIndex] = useState<number>(0);
   const [customInput, setCustomInput] = useState<string>('');
+  const [ranCaseIndex, setRanCaseIndex] = useState<number>(0);
   const [isLoading, setIsLoading] = useState(true);
 
   const [code, setCode] = useState<string>('// Loading template...');
-  const [language, setLanguage] = useState('dart');
+  const [language, setLanguage] = useState('python');
+  const [codeSnippets, setCodeSnippets] = useState<any[]>([]);
+  const [isBookmarked, setIsBookmarked] = useState(false);
   
   const [executing, setExecuting] = useState(false);
-  const [output, setOutput] = useState<ExecutionResult | null>(null);
+  const [outputs, setOutputs] = useState<(ExecutionResult | null)[]>([]);
   const [activeTab, setActiveTab] = useState<'testcase' | 'result'>('testcase');
 
   const languageStubs: { [key: string]: string } = {
-    dart: "void main() {\n  print('Hello, CodePath!');\n}",
-    python: "def solve():\n    print('Hello, CodePath!')\n\nif __name__ == '__main__':\n    solve()",
-    cpp: "#include <iostream>\n\nint main() {\n    std::cout << \"Hello, CodePath!\" << std::endl;\n    return 0;\n}",
-    java: "public class Main {\n    public static void main(String[] args) {\n        System.out.println(\"Hello, CodePath!\");\n    }\n}"
+    dart: "class Solution {\n  dynamic solve() {\n    // Write your code here\n  }\n}",
+    python: "class Solution:\n    def solve(self):\n        pass",
+    cpp: "class Solution {\npublic:\n    void solve() {\n        \n    }\n};",
+    java: "class Solution {\n    public void solve() {\n        \n    }\n}"
   };
 
   useEffect(() => {
     loadData();
+    checkBookmark();
   }, [company, id]);
+
+  const checkBookmark = async () => {
+    if (!auth.currentUser || !company || !id) return;
+    const bookmarkId = `${auth.currentUser.uid}_${id}`;
+    const docRef = doc(db, 'bookmarks', bookmarkId);
+    const snap = await getDoc(docRef);
+    setIsBookmarked(snap.exists());
+  };
 
   const loadData = async () => {
     if (!company || !id) return;
     setIsLoading(true);
 
-    const problemsList = await importCompanyProblems(company);
-    const found = problemsList.find(p => p.id.toString() === id);
+    const mCompany = company || 'leetcode';
+    const problemsList = await importCompanyProblems(mCompany);
+    const idSlug = id.toLowerCase().replace(/[^a-z0-9\\s-]/g, '').trim().replace(/\\s+/g, '-');
+    
+    let found: any = problemsList.find(p => 
+      p.id.toString() === id || 
+      (p.url && (p.url.includes(`/${id}`) || p.url.includes(`/${id}/`))) ||
+      (p.title && p.title.toLowerCase().replace(/[^a-z0-9\s-]/g, '').trim().replace(/\s+/g, '-') === idSlug)
+    );
+    let details: any = null;
+
+    if (!found) {
+      const customList = await fetchCustomProblemsByCompany(company);
+      found = customList.find(p => 
+        p.id === id || 
+        (p.title && p.title.toLowerCase().replace(/[^a-z0-9\s-]/g, '').trim().replace(/\s+/g, '-') === idSlug)
+      );
+      if (found) {
+        details = {
+          content: found.content || '',
+          sampleTestCase: found.sampleTestCase || '',
+          exampleTestcases: found.exampleTestcases || ''
+        };
+      }
+    }
+
     if (found) {
       setProblemMeta(found);
       setCode(languageStubs[language] || '// Type your code here...');
       
       const slug = found.url ? found.url.split('/problems/')[1]?.split('/')[0] : id;
-      console.log("PROBLEM_DEBUG: ID:", id, "URL:", found.url, "SLUG:", slug);
-      if (slug) {
-        const details = await fetchProblemDetails(slug);
-        console.log("PROBLEM_DEBUG: Fetched Details:", details);
+      if ((!details || !details.content || !details.codeSnippets || details.codeSnippets.length === 0) && slug) {
+        const liveDetails = await fetchProblemDetails(slug);
+        if (liveDetails && liveDetails.content) {
+          details = liveDetails;
+        }
+      }
+
+      if (details) {
         setDescription(details.content);
-        setSampleTestCase(details.sampleTestCase || '');
         setCustomInput(details.sampleTestCase || '');
+
+        const snippets = details.codeSnippets || [];
+        setCodeSnippets(snippets);
+        const getSnippetInner = (lang: string) => {
+          const map: { [key: string]: string[] } = { python: ['python3', 'python'] };
+          const search = map[lang] || [lang];
+          const match = snippets.find((s: any) => search.includes(s.langSlug.toLowerCase()));
+          return match ? match.code : (languageStubs[lang] || '// Type here...');
+        };
+        setCode(getSnippetInner(language));
 
         const sampleLinesCount = (details.sampleTestCase || '').split('\n').filter(Boolean).length || 1;
         const allLines = (details.exampleTestcases || '').split('\n').filter(Boolean);
@@ -90,6 +140,27 @@ const ProblemEditor: React.FC = () => {
         const expected = extractOutputs(details.content);
         setExpectedOutputs(expected);
         console.log("PROBLEM_DEBUG: Extracted Expected Outputs:", expected);
+        
+        // Fetch latest past submission
+        if (auth.currentUser) {
+          try {
+            const q = query(
+              collection(db, "submissions"),
+              where("uid", "==", auth.currentUser.uid),
+              where("title", "==", found.title),
+              orderBy("timestamp", "desc"),
+              limit(1)
+            );
+            const snap = await getDocs(q);
+            if (!snap.empty) {
+              const latest = snap.docs[0].data();
+              if (latest.language) setLanguage(latest.language);
+              if (latest.code) setCode(latest.code);
+            }
+          } catch (e) {
+            console.error("Failed to load historical submission:", e);
+          }
+        }
       }
     } else {
       console.log("PROBLEM_DEBUG: Problem NOT FOUND in list!");
@@ -97,11 +168,29 @@ const ProblemEditor: React.FC = () => {
     setIsLoading(false);
   };
 
+  const getCodeSnippet = (lang: string) => {
+    const map: { [key: string]: string[] } = { python: ['python3', 'python'] };
+    const search = map[lang] || [lang];
+    const match = codeSnippets.find((s: any) => search.includes(s.langSlug.toLowerCase()));
+    return match ? match.code : (languageStubs[lang] || '// Type here...');
+  };
+
   const handleRun = async () => {
     setExecuting(true);
     setActiveTab('result');
-    const result = await executeCode(code, language, customInput);
-    setOutput(result);
+    
+    const casesToRun = testcaseCases.length > 0 ? testcaseCases : [customInput];
+    const newOutputs: (ExecutionResult | null)[] = new Array(casesToRun.length).fill(null);
+    setOutputs(newOutputs);
+    
+    // Run sequentially to avoid rate limiting
+    for (let i = 0; i < casesToRun.length; i++) {
+      setRanCaseIndex(i); // Update UI to show current running case
+      const result = await executeCode(code, language, casesToRun[i]);
+      newOutputs[i] = result;
+      setOutputs([...newOutputs]);
+    }
+    
     setExecuting(false);
   };
 
@@ -111,6 +200,7 @@ const ProblemEditor: React.FC = () => {
       await addDoc(collection(db, "submissions"), {
         uid: auth.currentUser.uid,
         title: problemMeta.title,
+        company: company || 'leetcode',
         language: language,
         code: code,
         timestamp: serverTimestamp(),
@@ -119,6 +209,31 @@ const ProblemEditor: React.FC = () => {
     } catch (e) {
       console.error("Save failed:", e);
       alert("❌ Failed to save submission.");
+    }
+  };
+
+  const toggleBookmark = async () => {
+    if (!auth.currentUser || !company || !id || !problemMeta) return;
+    const bookmarkId = `${auth.currentUser.uid}_${id}`;
+    const docRef = doc(db, 'bookmarks', bookmarkId);
+    
+    try {
+      if (isBookmarked) {
+        await deleteDoc(docRef);
+        setIsBookmarked(false);
+      } else {
+        await setDoc(docRef, {
+          uid: auth.currentUser.uid,
+          title: problemMeta.title,
+          difficulty: problemMeta.difficulty,
+          company: company,
+          url: problemMeta.url || `/problem/${company}/${id}`,
+          content: description
+        });
+        setIsBookmarked(true);
+      }
+    } catch (e) {
+      console.error('Bookmark toggle failed:', e);
     }
   };
 
@@ -134,10 +249,25 @@ const ProblemEditor: React.FC = () => {
           <span style={{ fontSize: '11px', color: 'var(--accent-green)' }}>{problemMeta?.difficulty || 'Medium'}</span>
         </div>
         
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: '12px' }}>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: '12px', alignItems: 'center' }}>
+          <button 
+            onClick={toggleBookmark}
+            style={{ 
+              background: 'none', border: 'none', cursor: 'pointer', 
+              color: isBookmarked ? 'var(--accent-blue)' : 'var(--text-secondary)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', marginRight: '8px' 
+            }}
+            title={isBookmarked ? "Remove Bookmark" : "Add Bookmark"}
+          >
+            <BookmarkIcon size={20} fill={isBookmarked ? 'var(--accent-blue)' : 'none'} />
+          </button>
           <select 
             value={language} 
-            onChange={(e) => { setLanguage(e.target.value); setCode(languageStubs[e.target.value] || '// Type here'); }}
+            onChange={(e) => { 
+              const lang = e.target.value;
+              setLanguage(lang); 
+              setCode(getCodeSnippet(lang)); 
+            }}
             style={{ padding: '6px 12px', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--glass-border)', color: 'white', borderRadius: '8px', cursor: 'pointer', outline: 'none' }}
           >
             <option value="dart" style={{ background: '#1a1a1a', color: 'white' }}>Dart</option>
@@ -240,49 +370,100 @@ const ProblemEditor: React.FC = () => {
 
               {activeTab === 'result' && (
                 <div>
-                  {executing ? (
-                    <p style={{ color: 'var(--accent-blue)', fontSize: '13px' }}>Executing code on Judge0...</p>
-                  ) : output ? (
+                  {outputs.length > 0 ? (
                     <div>
-                      <div style={{ display: 'flex', gap: '16px', marginBottom: '12px', fontSize: '12px' }}>
-                        <span style={{ 
-                          color: output.code === 0 && (!expectedOutputs[selectedCaseIndex] || output.stdout.trim() === expectedOutputs[selectedCaseIndex].trim()) ? 'var(--accent-green)' : 'var(--accent-rose)', 
-                          fontWeight: 'bold' 
-                        }}>
-                          Status: {output.code !== 0 ? `Error (${output.code})` : 
-                                   expectedOutputs[selectedCaseIndex] && output.stdout.trim() !== expectedOutputs[selectedCaseIndex].trim() ? 'Wrong Answer' : 'Accepted'}
-                        </span>
-                        {output.time && <span>Time: {output.time}s</span>}
-                        {output.memory && <span>Memory: {output.memory} KB</span>}
+                      {/* Overall Status Banner */}
+                      <div style={{ marginBottom: '20px' }}>
+                        {executing ? (
+                           <span style={{ color: 'var(--accent-blue)', fontSize: '20px', fontWeight: 'bold' }}>Executing...</span>
+                        ) : (
+                           (() => {
+                             const passed = outputs.filter((o, i) => o && o.code === 0 && (!expectedOutputs[i] || o.stdout.trim() === expectedOutputs[i].trim())).length;
+                             const allPassed = passed === outputs.length;
+                             return (
+                               <span style={{ color: allPassed ? '#2cbb5d' : '#ef4743', fontWeight: 'bold', fontSize: '20px' }}>
+                                 {allPassed ? 'Accepted' : 'Wrong Answer'}
+                               </span>
+                             )
+                           })()
+                        )}
+                        {!executing && outputs.every(o => o) && (
+                          <div style={{ fontSize: '13px', color: 'rgba(255,255,255,0.7)', marginTop: '8px', fontWeight: '500' }}>
+                            {outputs.filter((o, i) => o && o.code === 0 && (!expectedOutputs[i] || o.stdout.trim() === expectedOutputs[i].trim())).length} / {outputs.length} testcases passed
+                          </div>
+                        )}
                       </div>
 
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                        <div>
-                          <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.5)' }}>Actual Output</span>
-                          <pre style={{ margin: '4px 0 0', background: 'rgba(255,255,255,0.03)', padding: '8px', borderRadius: '4px', fontSize: '13px', color: 'white' }}>
-                            {output.stdout || "No standard output"}
-                          </pre>
-                        </div>
-                        {expectedOutputs[selectedCaseIndex] && (
-                          <div>
-                            <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.5)' }}>Expected Output</span>
-                            <pre style={{ margin: '4px 0 0', background: 'rgba(0, 200, 83, 0.05)', padding: '8px', borderRadius: '4px', fontSize: '13px', color: 'var(--accent-green)' }}>
-                              {expectedOutputs[selectedCaseIndex]}
-                            </pre>
-                          </div>
-                        )}
-                        {output.stderr && (
-                          <div>
-                            <span style={{ fontSize: '11px', color: 'var(--accent-rose)' }}>Error Output</span>
-                            <pre style={{ margin: '4px 0 0', background: 'rgba(255, 0, 92, 0.05)', padding: '8px', borderRadius: '4px', fontSize: '12px', color: 'var(--accent-rose)' }}>
-                              {output.stderr}
-                            </pre>
-                          </div>
-                        )}
+                      {/* Case Selectors */}
+                      <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
+                        {outputs.map((_, idx) => {
+                          const o = outputs[idx];
+                          const passed = o && o.code === 0 && (!expectedOutputs[idx] || o.stdout.trim() === expectedOutputs[idx].trim());
+                          return (
+                            <button 
+                              key={idx}
+                              onClick={() => setRanCaseIndex(idx)}
+                              style={{
+                                padding: '6px 12px', background: ranCaseIndex === idx ? 'rgba(255,255,255,0.1)' : 'transparent',
+                                border: 'none', borderRadius: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px'
+                              }}
+                            >
+                              <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: !o ? 'gray' : passed ? '#2cbb5d' : '#ef4743' }} />
+                              <span style={{ color: ranCaseIndex === idx ? 'white' : 'rgba(255,255,255,0.5)', fontSize: '12px', fontWeight: '600' }}>Case {idx + 1}</span>
+                            </button>
+                          );
+                        })}
                       </div>
+
+                      {/* Case Details */}
+                      {outputs[ranCaseIndex] ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                          <div>
+                            <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.6)', fontWeight: '500', marginBottom: '8px' }}>Input</div>
+                            <div style={{ background: 'rgba(255,255,255,0.05)', padding: '12px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                               <pre style={{ margin: 0, fontSize: '13px', color: 'white', fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>
+                                 {testcaseCases.length > 0 ? testcaseCases[ranCaseIndex] : customInput}
+                               </pre>
+                            </div>
+                          </div>
+
+                          <div>
+                            <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.6)', fontWeight: '500', marginBottom: '8px' }}>Output</div>
+                            <div style={{ background: 'rgba(255,255,255,0.05)', padding: '12px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                               <pre style={{ margin: 0, fontSize: '13px', color: outputs[ranCaseIndex]!.code !== 0 ? '#ef4743' : 'white', fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>
+                                 {outputs[ranCaseIndex]!.stdout || " "}
+                               </pre>
+                            </div>
+                          </div>
+                          
+                          {expectedOutputs[ranCaseIndex] && (
+                            <div>
+                              <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.6)', fontWeight: '500', marginBottom: '8px' }}>Expected</div>
+                              <div style={{ background: 'rgba(255,255,255,0.05)', padding: '12px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                                 <pre style={{ margin: 0, fontSize: '13px', color: 'white', fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>
+                                   {expectedOutputs[ranCaseIndex]}
+                                 </pre>
+                              </div>
+                            </div>
+                          )}
+
+                          {outputs[ranCaseIndex]!.stderr && (
+                            <div>
+                              <div style={{ fontSize: '12px', color: '#ef4743', fontWeight: '500', marginBottom: '8px' }}>Error Details</div>
+                              <div style={{ background: 'rgba(239,71,67,0.1)', padding: '12px', borderRadius: '8px', border: '1px solid rgba(239,71,67,0.2)' }}>
+                                 <pre style={{ margin: 0, fontSize: '13px', color: '#ef4743', fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>
+                                   {outputs[ranCaseIndex]!.stderr}
+                                 </pre>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: '13px' }}>Executing case {ranCaseIndex + 1}...</div>
+                      )}
                     </div>
                   ) : (
-                    <p style={{ margin: 0, color: 'rgba(255,255,255,0.3)', fontSize: '13px' }}>Run your code to execute on the testcase.</p>
+                    <p style={{ margin: 0, color: 'rgba(255,255,255,0.3)', fontSize: '13px' }}>Run your code to execute on all testcases.</p>
                   )}
                 </div>
               )}

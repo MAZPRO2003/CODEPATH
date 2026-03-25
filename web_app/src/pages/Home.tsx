@@ -2,6 +2,9 @@ import React, { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { discoverCompanies, importCompanyProblems, type Problem } from '../services/githubService';
 import { fetchProblemDetails } from '../services/problemDescriptionService';
+import { fetchCustomCompanies, saveCustomProblem, fetchCustomProblemsByCompany, deleteCustomCompany } from '../services/customQuestionService';
+import { db, auth } from '../firebase';
+import { collection, query, where, getDocs } from 'firebase/firestore';
 
 const LazyTopic: React.FC<{ problem: Problem }> = ({ problem }) => {
   const [topics, setTopics] = useState<string[]>([]);
@@ -54,16 +57,145 @@ const Home: React.FC = () => {
   const [selectedCompany, setSelectedCompany] = useState<string | null>(null);
   const [problems, setProblems] = useState<Problem[]>([]);
   const [loadingProblems, setLoadingProblems] = useState(false);
+  const [customCompanies, setCustomCompanies] = useState<string[]>([]);
+  const [completedProblems, setCompletedProblems] = useState<string[]>([]);
+
+  const handleDeleteCompany = async (company: string) => {
+    if (!window.confirm(`Are you sure you want to delete "${company}" and all its custom questions?`)) return;
+    try {
+      await deleteCustomCompany(company);
+      alert("✅ Company deleted successfully!");
+      setSelectedCompany(null);
+      fetchCompanies();
+    } catch (e) {
+      alert("Failed to delete company.");
+    }
+  };
+
+  // --- Add Question Modal State ---
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [addTab, setAddTab] = useState<'slug' | 'manual'>('slug');
+  const [isSaving, setIsSaving] = useState(false);
+  
+  // Slug inputs
+  const [slugInput, setSlugInput] = useState('');
+  const [slugCompany, setSlugCompany] = useState('');
+  
+  // Manual inputs
+  const [manualTitle, setManualTitle] = useState('');
+  const [manualCompany, setManualCompany] = useState('');
+  const [manualDifficulty, setManualDifficulty] = useState('Medium');
+  const [manualContent, setManualContent] = useState('');
+  const [manualSampleInput, setManualSampleInput] = useState('');
+  const [manualExampleTestcases, setManualExampleTestcases] = useState('');
+
+  const handleAddSlug = async () => {
+    if (!slugInput || !slugCompany) return alert("Please fill URL/Slug and company fields.");
+    setIsSaving(true);
+    try {
+      let slug = slugInput.trim();
+      if (slug.includes('leetcode.com/problems/')) {
+        const match = slug.match(/\/problems\/([a-zA-Z0-9\-]+)/);
+        if (match && match[1]) slug = match[1];
+      }
+
+      const details = await fetchProblemDetails(slug);
+      const matchedQ = leetcodeQuestions.find(q => q.slug === slug);
+      const exactTitle = matchedQ ? matchedQ.title : slug.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+      
+      const existing = companies.find(c => c.toLowerCase() === slugCompany.trim().toLowerCase());
+      const normalizedCompany = existing || slugCompany.trim();
+
+      await saveCustomProblem({
+        title: exactTitle,
+        url: `https://leetcode.com/problems/${slug}/`,
+        difficulty: 'Medium', 
+        company: normalizedCompany,
+        content: details.content,
+        sampleTestCase: details.sampleTestCase,
+        exampleTestcases: details.exampleTestcases
+      });
+      alert("✅ LeetCode question imported successfully!");
+      setIsAddModalOpen(false);
+      setSlugInput('');
+      fetchCompanies();
+    } catch (e) {
+      alert("Failed to import slug. Confirm LeetCode endpoint is reachable.");
+    }
+    setIsSaving(false);
+  };
+
+  const handleAddManual = async () => {
+    if (!manualTitle || !manualCompany || !manualContent) return alert("Fill Title, Company and Content fields.");
+    setIsSaving(true);
+    try {
+      const existing = companies.find(c => c.toLowerCase() === manualCompany.trim().toLowerCase());
+      const normalizedCompany = existing || manualCompany.trim();
+
+      await saveCustomProblem({
+        title: manualTitle,
+        url: '', 
+        difficulty: manualDifficulty,
+        company: normalizedCompany,
+        content: manualContent,
+        sampleTestCase: manualSampleInput,
+        exampleTestcases: manualExampleTestcases
+      });
+      alert("✅ Manual question saved into dashboard templates!");
+      setIsAddModalOpen(false);
+      setManualTitle('');
+      setManualContent('');
+      fetchCompanies();
+    } catch (e) {
+      alert("Error adding manual question files presets.");
+    }
+    setIsSaving(false);
+  };
+
+  const [leetcodeQuestions, setLeetcodeQuestions] = useState<{title: string, slug: string}[]>([]);
+
+  useEffect(() => {
+    const loadQuestions = async () => {
+      try {
+        const res = await fetch('https://leetcode.com/api/problems/algorithms/');
+        const data = await res.json();
+        const list = data.stat_status_pairs.map((p: any) => ({
+          title: p.stat.question__title,
+          slug: p.stat.question__title_slug
+        }));
+        setLeetcodeQuestions(list);
+      } catch (e) {
+        console.error("Failed to load leetcode questions", e);
+      }
+    };
+    loadQuestions();
+  }, []);
+
+  const fetchCompletedProblems = async () => {
+    if (!auth.currentUser) return;
+    try {
+      const q = query(collection(db, "submissions"), where("uid", "==", auth.currentUser.uid));
+      const snap = await getDocs(q);
+      const titles = snap.docs.map((doc: any) => doc.data().title as string);
+      setCompletedProblems(titles);
+    } catch (e) {
+      console.error("Failed to fetch completed:", e);
+    }
+  };
 
   useEffect(() => {
     fetchCompanies();
+    fetchCompletedProblems();
   }, []);
 
   const fetchCompanies = async () => {
     setIsLoading(true);
-    const data = await discoverCompanies();
-    setCompanies(data);
-    setFilteredCompanies(data);
+    const gitHubCompanies = await discoverCompanies();
+    const cCompanies = await fetchCustomCompanies();
+    setCustomCompanies(cCompanies);
+    const merged = Array.from(new Set([...gitHubCompanies, ...cCompanies]));
+    setCompanies(merged);
+    setFilteredCompanies(merged);
     setIsLoading(false);
   };
 
@@ -80,11 +212,13 @@ const Home: React.FC = () => {
   const handleCompanyClick = async (company: string) => {
     setSelectedCompany(company);
     setLoadingProblems(true);
-    const data = await importCompanyProblems(company);
+    const gitHubProblems = await importCompanyProblems(company);
+    const customProblems = await fetchCustomProblemsByCompany(company);
+    const combined = [...gitHubProblems, ...customProblems];
     
     // Sort by difficulty: Easy -> Medium -> Hard
     const difficultyOrder: { [key: string]: number } = { 'easy': 1, 'medium': 2, 'hard': 3 };
-    const sortedData = [...data].sort((a, b) => {
+    const sortedData = combined.sort((a, b) => {
       const diffA = difficultyOrder[a.difficulty.toLowerCase()] || 4;
       const diffB = difficultyOrder[b.difficulty.toLowerCase()] || 4;
       return diffA - diffB;
@@ -122,9 +256,14 @@ const Home: React.FC = () => {
           <h1 style={{ margin: 0, fontSize: '28px', fontWeight: 'bold' }}>Coding Challenge Dashboard</h1>
           <p style={{ margin: '4px 0 0', color: 'var(--text-secondary)' }}>Select a company below to load and practice their interview questions.</p>
         </div>
-        <button onClick={fetchCompanies} className="accent-button" style={{ padding: '8px 16px', background: 'rgba(0, 209, 255, 0.1)', color: 'var(--accent-blue)', border: '1px solid rgba(0, 209, 255, 0.3)' }}>
-          Refresh
-        </button>
+        <div style={{ display: 'flex', gap: '12px' }}>
+          <button onClick={() => setIsAddModalOpen(true)} className="accent-button" style={{ padding: '8px 16px', background: 'rgba(0, 209, 255, 0.1)', color: 'var(--accent-blue)', border: '1px solid rgba(0, 209, 255, 0.3)' }}>
+            ➕ Add Question
+          </button>
+          <button onClick={fetchCompanies} className="accent-button" style={{ padding: '8px 16px', background: 'rgba(255,100,0,0.05)', color: 'rgba(255,255,255,0.8)', border: '1px solid var(--glass-border)' }}>
+            Refresh
+          </button>
+        </div>
       </div>
 
       {/* Search Input */}
@@ -196,7 +335,17 @@ const Home: React.FC = () => {
             <button onClick={() => setSelectedCompany(null)} style={{ position: 'absolute', top: '16px', right: '16px', background: 'none', border: 'none', color: 'white', cursor: 'pointer', fontSize: '20px' }}>
               &times;
             </button>
-            <h2 style={{ marginTop: 0, fontSize: '24px', textTransform: 'uppercase', color: 'var(--accent-blue)' }}>{selectedCompany}</h2>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '8px', marginBottom: '12px' }}>
+              <h2 style={{ margin: 0, fontSize: '24px', textTransform: 'uppercase', color: 'var(--accent-blue)' }}>{selectedCompany}</h2>
+              {customCompanies.includes(selectedCompany!) && (
+                <button 
+                  onClick={() => handleDeleteCompany(selectedCompany!)} 
+                  style={{ background: 'rgba(255,0,0,0.1)', border: '1px solid rgba(255,0,0,0.3)', color: '#ff4d4d', padding: '6px 12px', borderRadius: '8px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}
+                >
+                  Delete Company
+                </button>
+              )}
+            </div>
             <p style={{ color: 'var(--text-secondary)', fontSize: '14px' }}>Practice optimal solutions to ace your interviews.</p>
             <hr style={{ borderColor: 'var(--glass-border)', margin: '16px 0' }} />
 
@@ -240,7 +389,10 @@ const Home: React.FC = () => {
                             }}
                           >
                             <div style={{ flex: 1 }}>
-                              <h5 style={{ margin: 0, fontSize: '14px', color: 'rgba(255,255,255,0.9)' }}>{prob.title}</h5>
+                              <h5 style={{ margin: 0, fontSize: '14px', color: 'rgba(255,255,255,0.9)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                {prob.title}
+                                {completedProblems.includes(prob.title) && <span style={{ color: 'var(--accent-green)', fontSize: '14px' }}>✅</span>}
+                              </h5>
                               <LazyTopic problem={prob} />
                             </div>
                             <div style={{ 
@@ -259,6 +411,87 @@ const Home: React.FC = () => {
                     </div>
                   );
                 })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Add Question Modal */}
+      {isAddModalOpen && (
+        <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0, 0, 0, 0.8)', backdropFilter: 'blur(8px)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 200 }}>
+          <div className="glass-card" style={{ width: '500px', padding: '32px', position: 'relative', maxHeight: '90vh', overflowY: 'auto' }}>
+            <button onClick={() => setIsAddModalOpen(false)} style={{ position: 'absolute', top: '16px', right: '16px', background: 'none', border: 'none', color: 'white', cursor: 'pointer', fontSize: '20px' }}>&times;</button>
+            <h3 style={{ marginTop: 0 }}>Add New Question</h3>
+
+            {/* Modal Tabs */}
+            <div style={{ display: 'flex', gap: '12px', marginBottom: '20px', borderBottom: '1px solid var(--glass-border)' }}>
+              <button onClick={() => setAddTab('slug')} style={{ padding: '10px', background: 'none', border: 'none', color: addTab === 'slug' ? 'var(--accent-blue)' : 'white', borderBottom: addTab === 'slug' ? '2px solid var(--accent-blue)' : 'none', cursor: 'pointer', flex: 1 }}>Via Slug</button>
+              <button onClick={() => setAddTab('manual')} style={{ padding: '10px', background: 'none', border: 'none', color: addTab === 'manual' ? 'var(--accent-blue)' : 'white', borderBottom: addTab === 'manual' ? '2px solid var(--accent-blue)' : 'none', cursor: 'pointer', flex: 1 }}>Manual Form</button>
+            </div>
+
+            {addTab === 'slug' ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <div>
+                  <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>LeetCode URL or Slug</label>
+                  <input 
+                    type="text" 
+                    list="leetcode-slugs"
+                    placeholder="e.g. https://leetcode.com/problems/two-sum/" 
+                    className="glass-input" 
+                    style={{ width: '100%', marginTop: '4px' }} 
+                    value={slugInput} 
+                    onChange={e => setSlugInput(e.target.value)} 
+                  />
+                  <datalist id="leetcode-slugs">
+                    {leetcodeQuestions.map(q => (
+                      <option key={q.slug} value={q.slug}>{q.title}</option>
+                    ))}
+                  </datalist>
+                </div>
+                <div>
+                  <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Company Target</label>
+                  <input type="text" placeholder="e.g. Google" className="glass-input" style={{ width: '100%', marginTop: '4px' }} value={slugCompany} onChange={e => setSlugCompany(e.target.value)} />
+                </div>
+                <button onClick={handleAddSlug} disabled={isSaving} className="accent-button" style={{ padding: '12px', marginTop: '12px' }}>
+                  {isSaving ? 'Fetching & Saving...' : 'Import Question'}
+                </button>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <div>
+                  <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Title *</label>
+                  <input type="text" placeholder="Problem Title" className="glass-input" style={{ width: '100%', marginTop: '4px' }} value={manualTitle} onChange={e => setManualTitle(e.target.value)} />
+                </div>
+                <div style={{ display: 'flex', gap: '12px' }}>
+                  <div style={{ flex: 1 }}>
+                    <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Company *</label>
+                    <input type="text" placeholder="Company Name" className="glass-input" style={{ width: '100%', marginTop: '4px', height: '45px', boxSizing: 'border-box' }} value={manualCompany} onChange={e => setManualCompany(e.target.value)} />
+                  </div>
+                  <div style={{ width: '120px' }}>
+                    <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Difficulty</label>
+                    <select className="glass-input" style={{ width: '100%', marginTop: '4px', height: '45px', boxSizing: 'border-box', background: '#1a1a1a', color: 'white' }} value={manualDifficulty} onChange={e => setManualDifficulty(e.target.value)}>
+                      <option value="Easy">Easy</option>
+                      <option value="Medium">Medium</option>
+                      <option value="Hard">Hard</option>
+                    </select>
+                  </div>
+                </div>
+                <div>
+                  <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Content (HTML Allowed) *</label>
+                  <textarea placeholder="Problem Description or HTML..." className="glass-input" style={{ width: '100%', minHeight: '80px', marginTop: '4px' }} value={manualContent} onChange={e => setManualContent(e.target.value)} />
+                </div>
+                <div>
+                  <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Sample Test Case input</label>
+                  <textarea placeholder="e.g. [2,7,11,15]\n9" className="glass-input" style={{ width: '100%', minHeight: '40px', marginTop: '4px' }} value={manualSampleInput} onChange={e => setManualSampleInput(e.target.value)} />
+                </div>
+                <div>
+                  <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>All Example Testcases (separated by row)</label>
+                  <textarea placeholder="e.g. [2,7,11,15]\n9\n[3,2,4]\n6" className="glass-input" style={{ width: '100%', minHeight: '40px', marginTop: '4px' }} value={manualExampleTestcases} onChange={e => setManualExampleTestcases(e.target.value)} />
+                </div>
+                <button onClick={handleAddManual} disabled={isSaving} className="accent-button" style={{ padding: '12px', marginTop: '12px' }}>
+                  {isSaving ? 'Saving...' : 'Create Question'}
+                </button>
               </div>
             )}
           </div>

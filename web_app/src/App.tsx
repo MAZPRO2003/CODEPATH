@@ -10,7 +10,8 @@ import Rankings from './pages/Rankings';
 import Profile from './pages/Profile';
 import Discuss from './pages/Discuss';
 import Vault from './pages/Vault';
-import Roadmaps from './pages/Roadmaps';
+import Bookmarks from './pages/Bookmarks';
+import DailyGoals from './pages/DailyGoals';
 import { Chats, Settings } from './pages/Stubs';
 import { DashboardLayout } from './components/DashboardLayout';
 
@@ -43,8 +44,9 @@ function App() {
             <Route path="rankings" element={<Rankings />} />
             <Route path="profile" element={<Profile />} />
             <Route path="discuss" element={<Discuss />} />
-            <Route path="roadmaps" element={<Roadmaps />} />
             <Route path="chats" element={<Chats />} />
+            <Route path="bookmarks" element={<Bookmarks />} />
+            <Route path="goals" element={<DailyGoals />} />
             <Route path="vault" element={<Vault />} />
             <Route path="settings" element={<Settings />} />
           </Route>

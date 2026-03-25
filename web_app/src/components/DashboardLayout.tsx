@@ -1,14 +1,15 @@
 import React from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { 
-  BarChart2, Map, MessageSquare, Flame, 
-  MessageCircle, User, Award, Shield, Settings 
+  BarChart2, Bookmark, MessageSquare, Flame, 
+  MessageCircle, User, Award, Shield, Settings, Target
 } from 'lucide-react';
 
 const Sidebar: React.FC = () => {
   const navItems = [
     { icon: <BarChart2 size={24} />, label: 'Dashboard', path: '/' },
-    { icon: <Map size={24} />, label: 'Roadmaps', path: '/roadmaps' },
+    { icon: <Bookmark size={24} />, label: 'Saved', path: '/bookmarks' },
+    { icon: <Target size={24} />, label: 'Goals', path: '/goals' },
     { icon: <MessageSquare size={24} />, label: 'Chats', path: '/chats' },
     { icon: <Flame size={24} />, label: 'Battle', path: '/battle' },
     { icon: <MessageCircle size={24} />, label: 'Discuss', path: '/discuss' },

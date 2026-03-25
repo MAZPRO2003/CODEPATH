@@ -1,8 +1,8 @@
-export const fetchProblemDetails = async (slug: string): Promise<{ content: string; sampleTestCase: string; exampleTestcases: string; topicTags?: string[] }> => {
+export const fetchProblemDetails = async (slug: string): Promise<{ content: string; sampleTestCase: string; exampleTestcases: string; topicTags?: string[]; codeSnippets?: { lang: string; langSlug: string; code: string }[] }> => {
   const apiUrl = '/graphql';
   
   const requestBody = {
-    query: "query questionData($titleSlug: String!) { question(titleSlug: $titleSlug) { content sampleTestCase exampleTestcases topicTags { name } } }",
+    query: "query questionData($titleSlug: String!) { question(titleSlug: $titleSlug) { content sampleTestCase exampleTestcases topicTags { name } codeSnippets { lang langSlug code } } }",
     variables: { titleSlug: slug }
   };
 
@@ -23,7 +23,8 @@ export const fetchProblemDetails = async (slug: string): Promise<{ content: stri
           content: q.content || '',
           sampleTestCase: q.sampleTestCase || '',
           exampleTestcases: q.exampleTestcases || '',
-          topicTags: q.topicTags ? q.topicTags.map((t: any) => t.name) : []
+          topicTags: q.topicTags ? q.topicTags.map((t: any) => t.name) : [],
+          codeSnippets: q.codeSnippets || []
         };
       }
       throw new Error('Problem data not found in response.');
