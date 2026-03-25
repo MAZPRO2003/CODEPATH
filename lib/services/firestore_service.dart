@@ -178,12 +178,13 @@ class FirestoreService {
   }
 
   /// Save a successful code compilation to the Solution Vault
-  static Future<void> saveSubmission(String title, String language, String code) async {
+  static Future<void> saveSubmission(String title, String language, String code, {String company = 'Practice'}) async {
     final user = AuthService.currentUser;
     if (user == null) return;
 
     final submissionData = {
       'title': title,
+      'company': company,
       'language': language,
       'code': code,
       'timestamp': DateTime.now().toIso8601String(),
@@ -226,6 +227,41 @@ class FirestoreService {
     return submissions;
   }
 
+  /// Get latest submission for a specific problem title
+  static Future<Map<String, dynamic>?> getLatestSubmission(String title) async {
+    final user = AuthService.currentUser;
+    if (user == null) return null;
+
+    try {
+      if (Platform.isLinux) {
+        final docs = await AuthService.firedartDb
+            .collection('submissions_${user.uid}')
+            .where('title', isEqualTo: title)
+            .get();
+            
+        if (docs.isEmpty) return null;
+        
+        final subs = docs.map((d) => d.map).toList();
+        subs.sort((a, b) => (b['timestamp']?.toString() ?? '').compareTo(a['timestamp']?.toString() ?? ''));
+        return subs.first;
+      } else {
+        final snapshot = await _db.collection('users').doc(user.uid)
+            .collection('submissions')
+            .where('title', isEqualTo: title)
+            .orderBy('timestamp', descending: true)
+            .limit(1)
+            .get();
+            
+        if (snapshot.docs.isNotEmpty) {
+          return snapshot.docs.first.data();
+        }
+      }
+    } catch (e) {
+      print('Failed to load past submission: $e');
+    }
+    return null;
+  }
+
   /// Update Elo Rating
   static Future<void> recordBattleResult(bool isWin) async {
     final user = AuthService.currentUser;
@@ -249,6 +285,169 @@ class FirestoreService {
         currentElo = isWin ? currentElo + 25 : (currentElo - 25 < 0 ? 0 : currentElo - 25);
 
         await docRef.update({'rating': currentElo});
+      }
+    } catch (_) {}
+  }
+
+  /// Add Custom Problem to Firestore
+  static Future<void> saveCustomProblem(Map<String, dynamic> problem) async {
+    try {
+      final problemData = {
+        ...problem,
+        'createdAt': DateTime.now().toIso8601String(),
+      };
+      if (Platform.isLinux) {
+        await AuthService.firedartDb.collection('problems').add(problemData);
+      } else {
+        await _db.collection('problems').add(problemData);
+      }
+    } catch (e) {
+      print('Error saving custom problem: $e');
+    }
+  }
+
+  /// Fetches custom companies from problems collection
+  static Future<List<String>> fetchCustomCompanies() async {
+    try {
+      List<dynamic> docs;
+      if (Platform.isLinux) {
+        docs = await AuthService.firedartDb.collection('problems').get();
+      } else {
+        final snap = await _db.collection('problems').get();
+        docs = snap.docs;
+      }
+      final companies = <String>{};
+      for (var doc in docs) {
+        final data = Platform.isLinux 
+            ? (doc as dynamic).map 
+            : (doc as fb_store.QueryDocumentSnapshot).data() as Map<String, dynamic>;
+        if (data['company'] != null) companies.add(data['company'].toString());
+      }
+      return companies.toList();
+    } catch (e) {
+      print('Error fetching custom companies: $e');
+      return [];
+    }
+  }
+
+  /// Fetches problems by company
+  static Future<List<Map<String, dynamic>>> fetchCustomProblemsByCompany(String company) async {
+    List<Map<String, dynamic>> res = [];
+    try {
+      if (Platform.isLinux) {
+        final docs = await AuthService.firedartDb.collection('problems').get();
+        for (var doc in docs) {
+          if (doc.map['company'] == company) {
+            final m = Map<String, dynamic>.from(doc.map);
+            m['id'] = doc.id;
+            res.add(m);
+          }
+        }
+      } else {
+        final snap = await _db.collection('problems').where('company', isEqualTo: company).get();
+        for (var doc in snap.docs) {
+          final m = doc.data() as Map<String, dynamic>;
+          m['id'] = doc.id;
+          res.add(m);
+        }
+      }
+    } catch (_) {}
+    return res;
+  }
+  /// Deletes all problems matching the company from Firestore
+  static Future<void> deleteCustomCompany(String company) async {
+    try {
+      if (Platform.isLinux) {
+        final docs = await AuthService.firedartDb.collection('problems').get();
+        for (var doc in docs) {
+          if (doc.map['company'] == company) {
+            await AuthService.firedartDb.collection('problems').document(doc.id).delete();
+          }
+        }
+      } else {
+        final snap = await _db.collection('problems').where('company', isEqualTo: company).get();
+        final batch = _db.batch();
+        for (var doc in snap.docs) {
+          batch.delete(doc.reference);
+        }
+        await batch.commit();
+      }
+    } catch (e) {
+      print('Error deleting custom company: $e');
+    }
+  }
+
+  /// Gets the current user's stat document
+  static Future<Map<String, dynamic>> getUserStats() async {
+    final user = AuthService.currentUser;
+    if (user == null) return {};
+    try {
+      if (Platform.isLinux) {
+        final doc = await AuthService.firedartDb.collection('users').document(user.uid).get();
+        return Map<String, dynamic>.from(doc.map);
+      } else {
+        final doc = await _db.collection('users').doc(user.uid).get();
+        return doc.data() ?? {};
+      }
+    } catch (_) {
+      return {};
+    }
+  }
+
+  /// Sets the user's daily target count
+  static Future<void> setDailyTarget(int target) async {
+    final user = AuthService.currentUser;
+    if (user == null) return;
+    try {
+      if (Platform.isLinux) {
+        await AuthService.firedartDb.collection('users').document(user.uid).update({'daily_target': target});
+      } else {
+        await _db.collection('users').doc(user.uid).set({'daily_target': target}, fb_store.SetOptions(merge: true));
+      }
+    } catch (_) {}
+  }
+
+  /// Gets bookmarks for the current user
+  static Future<List<Map<String, dynamic>>> getBookmarks() async {
+    final user = AuthService.currentUser;
+    if (user == null) return [];
+    try {
+      if (Platform.isLinux) {
+        final docs = await AuthService.firedartDb.collection('bookmarks').get();
+        return docs
+          .where((d) => d.map['uid'] == user.uid)
+          .map((d) { final m = Map<String, dynamic>.from(d.map); m['id'] = d.id; return m; })
+          .toList();
+      } else {
+        final snap = await _db.collection('bookmarks').where('uid', isEqualTo: user.uid).get();
+        return snap.docs.map((d) { final m = d.data(); m['id'] = d.id; return m; }).toList();
+      }
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Adds a bookmark for a problem
+  static Future<void> addBookmark(Map<String, dynamic> problem) async {
+    final user = AuthService.currentUser;
+    if (user == null) return;
+    try {
+      final data = {...problem, 'uid': user.uid, 'bookmarked_at': DateTime.now().toIso8601String()};
+      if (Platform.isLinux) {
+        await AuthService.firedartDb.collection('bookmarks').add(data);
+      } else {
+        await _db.collection('bookmarks').add(data);
+      }
+    } catch (_) {}
+  }
+
+  /// Removes a bookmark by its document ID
+  static Future<void> removeBookmark(String bookmarkId) async {
+    try {
+      if (Platform.isLinux) {
+        await AuthService.firedartDb.collection('bookmarks').document(bookmarkId).delete();
+      } else {
+        await _db.collection('bookmarks').doc(bookmarkId).delete();
       }
     } catch (_) {}
   }

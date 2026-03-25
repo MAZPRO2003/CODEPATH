@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:codepath/services/firestore_service.dart';
 import 'package:codepath/theme/app_theme.dart';
-import 'package:flutter_highlight/flutter_highlight.dart';
-import 'package:flutter_highlight/themes/monokai-sublime.dart';
+import 'package:codepath/models/problem.dart';
+import 'package:codepath/ui/screens/problem_editor_screen.dart';
 
 class VaultScreen extends StatefulWidget {
   const VaultScreen({super.key});
@@ -36,7 +36,7 @@ class _VaultScreenState extends State<VaultScreen> {
     if (isoString == null) return '';
     try {
       final dt = DateTime.parse(isoString).toLocal();
-      return '${dt.day}/${dt.month}/${dt.year} at ${dt.hour}:${dt.minute.toString().padLeft(2, '0')}';
+      return '${dt.day}/${dt.month}/${dt.year} · ${dt.hour}:${dt.minute.toString().padLeft(2, '0')}';
     } catch (_) {
       return '';
     }
@@ -51,67 +51,81 @@ class _VaultScreenState extends State<VaultScreen> {
         backgroundColor: Colors.transparent,
         elevation: 0,
         actions: [
-          IconButton(icon: const Icon(Icons.refresh), onPressed: _fetchSubmissions)
+          IconButton(icon: const Icon(Icons.refresh), onPressed: _fetchSubmissions),
         ],
       ),
-      body: _isLoading 
-        ? const Center(child: CircularProgressIndicator(color: AppColors.accentBlue))
-        : _submissions.isEmpty
-            ? const Center(child: Text('No submissions yet. Go battle!', style: TextStyle(color: Colors.white70)))
-            : ListView.builder(
-                padding: const EdgeInsets.all(24),
-                itemCount: _submissions.length,
-                itemBuilder: (context, index) {
-                  final sub = _submissions[index];
-                  final title = sub['title'] ?? 'Unknown Problem';
-                  final lang = sub['language'] ?? 'dart';
-                  final code = sub['code'] ?? '';
-                  final time = _formatDate(sub['timestamp']);
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator(color: AppColors.accentBlue))
+          : _submissions.isEmpty
+              ? Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.lock_outline, size: 64, color: AppColors.textSecondary.withValues(alpha: 0.3)),
+                      const SizedBox(height: 16),
+                      const Text('No solutions yet.', style: TextStyle(color: Colors.white54, fontSize: 18)),
+                      const SizedBox(height: 8),
+                      const Text('Submit a problem to store it here.', style: TextStyle(color: Colors.white30, fontSize: 13)),
+                    ],
+                  ),
+                )
+              : ListView.builder(
+                  padding: const EdgeInsets.all(16),
+                  itemCount: _submissions.length,
+                  itemBuilder: (context, index) {
+                    final sub = _submissions[index];
+                    final title = sub['title'] ?? 'Unknown Problem';
+                    final lang = sub['language'] ?? 'code';
+                    final company = sub['company'] ?? 'Practice';
+                    final time = _formatDate(sub['timestamp']);
 
-                  return Container(
-                    margin: const EdgeInsets.only(bottom: 24),
-                    decoration: BoxDecoration(
-                      color: AppColors.cardBackground,
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: AppColors.glassBorder, width: 0.5),
-                    ),
-                    clipBehavior: Clip.antiAlias,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(16),
-                          color: AppColors.sidebarBackground,
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.white)),
-                              Text(lang.toUpperCase(), style: const TextStyle(fontWeight: FontWeight.bold, color: AppColors.accentBlue)),
-                            ],
-                          ),
+                    return GestureDetector(
+                      onTap: () {
+                         final slug = title.toLowerCase().replaceAll(RegExp(r'[^a-z0-9\s-]'), '').trim().replaceAll(RegExp(r'\s+'), '-');
+                         Navigator.push(context, MaterialPageRoute(
+                           builder: (context) => ProblemEditorScreen(
+                             problem: Problem(
+                               title: title,
+                               difficulty: 'Medium',
+                               frequency: 0,
+                               acceptanceRate: 0.0,
+                               link: 'https://$company.com/problems/$slug/',
+                               topics: [],
+                               company: company,
+                             ),
+                           )
+                         ));
+                      },
+                      child: Container(
+                        margin: const EdgeInsets.only(bottom: 10),
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: AppColors.cardBackground,
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: AppColors.glassBorder, width: 0.5),
                         ),
-                        Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: Text('Solved on $time', style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    '$company · ${lang.toUpperCase()}${time.isNotEmpty ? ' · $time' : ''}',
+                                    style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const Icon(Icons.arrow_forward_ios, color: AppColors.accentBlue, size: 14),
+                          ],
                         ),
-                        // Highlight Code Block
-                        Container(
-                          color: const Color(0xFF23241f),
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(16),
-                          child: HighlightView(
-                            code,
-                            language: lang,
-                            theme: monokaiSublimeTheme,
-                            padding: const EdgeInsets.all(0),
-                            textStyle: const TextStyle(fontFamily: 'monospace', fontSize: 13),
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                },
-              ),
+                      ),
+                    );
+                  },
+                ),
     );
   }
 }

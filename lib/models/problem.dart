@@ -65,4 +65,19 @@ class Problem {
       company: company,
     );
   }
+
+  factory Problem.fromMap(Map<String, dynamic> map) {
+    return Problem(
+      title: map['title'] ?? 'Unknown',
+      difficulty: map['difficulty'] ?? 'Medium',
+      frequency: 0,
+      acceptanceRate: 0.0,
+      link: map['url'] ?? '',
+      topics: [],
+      company: map['company'] ?? 'Unknown',
+      description: map['content'],
+      sampleTestCase: map['sampleTestCase'],
+      exampleTestcases: map['exampleTestcases'],
+    );
+  }
 }

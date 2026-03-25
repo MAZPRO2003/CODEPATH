@@ -2,6 +2,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:codepath/theme/app_theme.dart';
 import 'package:codepath/models/problem.dart';
+import 'package:codepath/services/firestore_service.dart';
 import 'package:codepath/services/github_import_service.dart';
 import 'package:codepath/ui/screens/problem_editor_screen.dart';
 
@@ -22,6 +23,7 @@ class CompanyProblemsDialog extends StatefulWidget {
 class _CompanyProblemsDialogState extends State<CompanyProblemsDialog> {
   List<Problem>? _problems;
   bool _isLoading = true;
+  bool _isCustomCompany = false;
 
   @override
   void initState() {
@@ -33,9 +35,18 @@ class _CompanyProblemsDialogState extends State<CompanyProblemsDialog> {
     try {
       final service = GithubImportService();
       final p = await service.importCompanyProblems(widget.companyName);
+      final customData = await FirestoreService.fetchCustomProblemsByCompany(widget.companyName);
+      final customCompanies = await FirestoreService.fetchCustomCompanies();
+      
+      final List<Problem> combined = [...p];
+      for (var map in customData) {
+        combined.add(Problem.fromMap(map));
+      }
+
       if (mounted) {
         setState(() {
-          _problems = p;
+          _problems = combined;
+          _isCustomCompany = customCompanies.contains(widget.companyName);
           _isLoading = false;
         });
       }
@@ -80,8 +91,8 @@ class _CompanyProblemsDialogState extends State<CompanyProblemsDialog> {
         backgroundColor: AppColors.sidebarBackground,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
         child: Container(
-          width: 600,
-          height: 600,
+          width: MediaQuery.of(context).size.width * 0.9,
+          height: MediaQuery.of(context).size.height * 0.8,
           padding: const EdgeInsets.all(24),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -89,16 +100,28 @@ class _CompanyProblemsDialogState extends State<CompanyProblemsDialog> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(widget.companyName.toUpperCase(), style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white)),
-                      const Text('Select an interview question to practice', style: TextStyle(color: AppColors.textSecondary)),
-                    ],
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(widget.companyName.toUpperCase(), style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white)),
+                        const Text('Select an interview question to practice', style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+                      ],
+                    ),
                   ),
-                  IconButton(
-                    icon: const Icon(Icons.close, color: AppColors.textSecondary),
-                    onPressed: () => Navigator.pop(context),
+                  Row(
+                    children: [
+                      if (_isCustomCompany)
+                        IconButton(
+                          icon: const Icon(Icons.delete_outline, color: AppColors.accentRose),
+                          tooltip: 'Delete Company',
+                          onPressed: () => _handleDeleteCompany(context),
+                        ),
+                      IconButton(
+                        icon: const Icon(Icons.close, color: AppColors.textSecondary),
+                        onPressed: () => Navigator.pop(context),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -177,5 +200,26 @@ class _CompanyProblemsDialogState extends State<CompanyProblemsDialog> {
         ),
       ),
     );
+  }
+  void _handleDeleteCompany(BuildContext context) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Company', style: TextStyle(color: Colors.white)),
+        content: Text('Are you sure you want to delete "${widget.companyName}" and all its custom questions?', style: const TextStyle(color: Colors.white70)),
+        backgroundColor: AppColors.cardBackground,
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true), 
+            child: const Text('Delete', style: TextStyle(color: AppColors.accentRose)),
+          ),
+        ],
+      ),
+    );
+    if (confirm == true) {
+      await FirestoreService.deleteCustomCompany(widget.companyName);
+      if (mounted) Navigator.pop(context);
+    }
   }
 }

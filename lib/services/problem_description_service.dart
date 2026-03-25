@@ -5,11 +5,11 @@ import 'package:http/http.dart' as http;
 class ProblemDescriptionService {
   /// Fetches the full problem description and test cases directly from LeetCode GraphQL API.
   /// Returns a Map with 'content', 'sampleTestCase', and 'exampleTestcases'.
-  static Future<Map<String, String>> fetchProblemDetails(String slug) async {
+  static Future<Map<String, dynamic>> fetchProblemDetails(String slug) async {
     const String apiUrl = 'https://leetcode.com/graphql';
     
     final Map<String, dynamic> requestBody = {
-      "query": "query questionData(\$titleSlug: String!) { question(titleSlug: \$titleSlug) { content sampleTestCase exampleTestcases } }",
+      "query": "query questionData(\$titleSlug: String!) { question(titleSlug: \$titleSlug) { content sampleTestCase exampleTestcases codeSnippets { lang langSlug code } } }",
       "variables": {"titleSlug": slug}
     };
 
@@ -32,6 +32,7 @@ class ProblemDescriptionService {
             'content': q['content'] ?? '',
             'sampleTestCase': q['sampleTestCase'] ?? '',
             'exampleTestcases': q['exampleTestcases'] ?? '',
+            'codeSnippets': q['codeSnippets'] ?? [],
           };
         }
         throw Exception('Problem data not found in response.');

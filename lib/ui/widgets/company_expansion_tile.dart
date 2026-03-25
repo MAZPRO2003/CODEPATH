@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:codepath/models/problem.dart';
+import 'package:codepath/services/firestore_service.dart';
 import 'package:codepath/services/github_import_service.dart';
 import 'package:codepath/theme/app_theme.dart';
 import 'package:codepath/ui/screens/problem_editor_screen.dart';
@@ -28,9 +29,16 @@ class _CompanyExpansionTileState extends State<CompanyExpansionTile> {
       try {
         final service = GithubImportService();
         final p = await service.importCompanyProblems(widget.companyName);
+        final customData = await FirestoreService.fetchCustomProblemsByCompany(widget.companyName);
+        
+        final List<Problem> combined = [...p];
+        for (var map in customData) {
+          combined.add(Problem.fromMap(map));
+        }
+
         if (mounted) {
           setState(() {
-            _problems = p;
+            _problems = combined;
             _isLoading = false;
           });
         }

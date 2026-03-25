@@ -117,4 +117,37 @@ class GithubImportService {
     if (value.toLowerCase() == 'false') return false;
     return num.tryParse(value) ?? value;
   }
+
+  /// Fetches problem description directly from LeetCode GraphQL
+  Future<Map<String, String>> fetchProblemDetails(String slug) async {
+    const apiUrl = 'https://leetcode.com/graphql';
+    final requestBody = {
+      "query": "query questionData(\$titleSlug: String!) { question(titleSlug: \$titleSlug) { content sampleTestCase exampleTestcases } }",
+      "variables": {"titleSlug": slug}
+    };
+
+    try {
+      final response = await http.post(
+        Uri.parse(apiUrl),
+        headers: {"Content-Type": "application/json"},
+        body: json.encode(requestBody),
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final q = data['data']?['question'];
+        if (q != null) {
+          return {
+            'content': q['content'] ?? '',
+            'sampleTestCase': q['sampleTestCase'] ?? '',
+            'exampleTestcases': q['exampleTestcases'] ?? '',
+          };
+        }
+      }
+      return {};
+    } catch (e) {
+      print('GraphQL Fetch Error: $e');
+      return {};
+    }
+  }
 }

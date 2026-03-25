@@ -127,7 +127,7 @@ class _BattleArenaScreenState extends State<BattleArenaScreen> with TickerProvid
           BattleService.updateProgress(widget.battleId!, _myProgress);
         }
         if (_myProgress >= 1.0) {
-          FirestoreService.saveSubmission(widget.problem.title, 'dart', code);
+          FirestoreService.saveSubmission(widget.problem.title, 'dart', code, company: widget.problem.company);
           FirestoreService.syncSolvedProblem(widget.problem.title, widget.problem.difficulty);
           _handleBattleEnd("VICTORY", true);
         }

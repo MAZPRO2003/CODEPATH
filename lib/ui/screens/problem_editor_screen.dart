@@ -22,7 +22,8 @@ class ProblemEditorScreen extends StatefulWidget {
 class _ProblemEditorScreenState extends State<ProblemEditorScreen> {
   final GlobalKey<MonacoEditorState> _monacoKey = GlobalKey();
   final TextEditingController _testcaseController = TextEditingController();
-  String _selectedLanguage = 'Dart';
+  String _selectedLanguage = 'Python';
+  bool _isBookmarked = false;
   
   Timer? _timer;
   int _secondsElapsed = 0;
@@ -31,28 +32,67 @@ class _ProblemEditorScreenState extends State<ProblemEditorScreen> {
   String? _fullDescription;
   String _testInput = '';
   bool _isLoadingDetails = true;
+  List<dynamic> _codeSnippets = [];
+  String _currentCode = '';
+  int _ranCaseIndex = 0;
 
   List<String> _testcaseCases = [];
   List<String> _expectedOutputs = [];
   int _selectedCaseIndex = 0;
   String _activeConsoleTab = 'Testcase'; // 'Testcase' | 'Result'
 
-  String _executionOutput = '';
-  String _actualOutputValue = ''; // raw stdout
+  List<ExecutionResult?> _outputs = [];
   bool _isExecuting = false;
 
   final Map<String, String> _languageStubs = {
-    'Dart': "void main() {\n  print('Hello, CodePath!');\n}",
-    'Python': "def solve():\n    print('Hello, CodePath!')\n\nif __name__ == '__main__':\n    solve()",
-    'C++': "#include <iostream>\n\nint main() {\n    std::cout << \"Hello, CodePath!\" << std::endl;\n    return 0;\n}",
-    'Java': "public class Main {\n    public static void main(String[] args) {\n        System.out.println(\"Hello, CodePath!\");\n    }\n}",
+    'Dart': "class Solution {\n  dynamic solve() {\n    // Write your code here\n  }\n}",
+    'Python': "class Solution:\n    def solve(self):\n        pass",
+    'C++': "class Solution {\npublic:\n    void solve() {\n        \n    }\n};",
+    'Java': "class Solution {\n    public void solve() {\n        \n    }\n}",
   };
 
   @override
   void initState() {
     super.initState();
+    _currentCode = _languageStubs[_selectedLanguage]!;
     _startTimer();
     _fetchDetails();
+    _checkBookmarkStatus();
+  }
+
+  Future<void> _checkBookmarkStatus() async {
+    final bookmarks = await FirestoreService.getBookmarks();
+    if (mounted) {
+      setState(() {
+        _isBookmarked = bookmarks.any((b) => b['url']?.contains(widget.problem.slug) == true || b['title'] == widget.problem.title);
+      });
+    }
+  }
+
+  Future<void> _toggleBookmark() async {
+    setState(() => _isBookmarked = !_isBookmarked);
+    try {
+      if (_isBookmarked) {
+        await FirestoreService.addBookmark({
+          'title': widget.problem.title,
+          'difficulty': widget.problem.difficulty,
+          'company': widget.problem.company,
+          'url': widget.problem.link,
+          'content': _fullDescription ?? '',
+        });
+      } else {
+        final bookmarks = await FirestoreService.getBookmarks();
+        final bm = bookmarks.firstWhere(
+          (b) => b['url']?.contains(widget.problem.slug) == true || b['title'] == widget.problem.title,
+          orElse: () => {},
+        );
+        if (bm.isNotEmpty && bm['id'] != null) {
+          await FirestoreService.removeBookmark(bm['id']);
+        }
+      }
+    } catch (e) {
+      if (mounted) setState(() => _isBookmarked = !_isBookmarked); // rollback
+    }
   }
 
   void _fetchDetails() async {
@@ -62,9 +102,9 @@ class _ProblemEditorScreenState extends State<ProblemEditorScreen> {
     try {
       final details = await ProblemDescriptionService.fetchProblemDetails(widget.problem.slug);
       if (mounted) {
-        final sampleTestCase = details['sampleTestCase'] ?? '';
-        final exampleTestcases = details['exampleTestcases'] ?? '';
-        final content = details['content'] ?? '';
+        final String sampleTestCase = details['sampleTestCase'] ?? '';
+        final String exampleTestcases = details['exampleTestcases'] ?? '';
+        final String content = details['content'] ?? '';
 
         // 1. Chunk Testcases
         final sampleLines = sampleTestCase.split('\n').where((l) => l.trim().isNotEmpty).length;
@@ -91,8 +131,42 @@ class _ProblemEditorScreenState extends State<ProblemEditorScreen> {
           expected.add(match.group(1)!.trim());
         }
 
+        final List<dynamic> snippets = details['codeSnippets'] ?? [];
+        
+        String loadedCode = _currentCode;
+        final snippet = snippets.firstWhere((s) {
+           final lang = s['langSlug']?.toString().toLowerCase();
+           final search = _selectedLanguage.toLowerCase() == 'c++' ? 'cpp' : _selectedLanguage.toLowerCase();
+           return lang == search || lang == '${search}3';
+        }, orElse: () => null);
+
+        if (snippet != null && snippet['code'] != null) {
+           loadedCode = snippet['code'];
+           _monacoKey.currentState?.setCode(loadedCode);
+        }
+
+        // Fetch user's latest historical submission for this problem
+        final pastSubmission = await FirestoreService.getLatestSubmission(widget.problem.title);
+        if (pastSubmission != null) {
+           final pastLang = pastSubmission['language']?.toString();
+           final pastCode = pastSubmission['code']?.toString();
+           
+           if (pastLang != null) {
+              if (pastLang.toLowerCase() == 'python') { _selectedLanguage = 'Python'; }
+              else if (pastLang.toLowerCase() == 'java') { _selectedLanguage = 'Java'; }
+              else if (pastLang.toLowerCase() == 'cpp' || pastLang.toLowerCase() == 'c++') { _selectedLanguage = 'C++'; }
+              else if (pastLang.toLowerCase() == 'dart') { _selectedLanguage = 'Dart'; }
+           }
+           if (pastCode != null) {
+             loadedCode = pastCode;
+             _monacoKey.currentState?.setCode(loadedCode);
+           }
+        }
+
         setState(() {
           _fullDescription = content;
+          _codeSnippets = snippets;
+          _currentCode = loadedCode;
           _testcaseCases = cases;
           _expectedOutputs = expected;
           _selectedCaseIndex = 0;
@@ -106,7 +180,23 @@ class _ProblemEditorScreenState extends State<ProblemEditorScreen> {
     } catch (e) {
       if (mounted) {
         setState(() {
-          _fullDescription = "ERROR: Failed to connect to LeetCode.";
+          if (widget.problem.description != null && widget.problem.description!.isNotEmpty) {
+             _fullDescription = widget.problem.description;
+             
+             // Extract expected outputs from saved description
+             final cleanText = _fullDescription!.replaceAll(RegExp(r'<[^>]*>'), ' ');
+             final expRegex = RegExp(r'Output:\s*([^\n]+)', caseSensitive: false);
+             _expectedOutputs = expRegex.allMatches(cleanText).map((m) => m.group(1)!.trim()).toList();
+             
+             // Extract sample testcases if available
+             if (widget.problem.sampleTestCase != null && widget.problem.sampleTestCase!.isNotEmpty) {
+               _testcaseCases = [widget.problem.sampleTestCase!];
+               _testInput = _testcaseCases[0];
+               _testcaseController.text = _testInput;
+             }
+          } else {
+             _fullDescription = "ERROR: Failed to connect to LeetCode or missing description.";
+          }
           _isLoadingDetails = false;
         });
       }
@@ -116,42 +206,50 @@ class _ProblemEditorScreenState extends State<ProblemEditorScreen> {
   void _runCode() async {
     setState(() {
       _isExecuting = true;
-      _executionOutput = 'Executing...';
-      _activeConsoleTab = 'Result'; // Switch to Result tab on run
+      _activeConsoleTab = 'Result';
+      _ranCaseIndex = _selectedCaseIndex;
     });
+
+    final casesToRun = _testcaseCases.isNotEmpty ? _testcaseCases : [_testInput];
+    _outputs = List.filled(casesToRun.length, null);
 
     try {
       final code = await _monacoKey.currentState?.getCode() ?? '';
       final langId = _selectedLanguage == 'C++' ? 'cpp' : _selectedLanguage.toLowerCase();
-      final result = await CodeExecutionService.executeCode(
-        code,
-        language: langId,
-        stdin: _testInput,
-      );
-
+      
+      for (int i = 0; i < casesToRun.length; i++) {
+        if (!mounted) break;
+        setState(() => _ranCaseIndex = i); // update UI to show which case is running
+        
+        final result = await CodeExecutionService.executeCode(
+          code,
+          language: langId,
+          stdin: casesToRun[i],
+        );
+        
+        if (mounted) {
+          setState(() {
+            _outputs[i] = result;
+          });
+        }
+      }
+      
       if (mounted) {
         setState(() {
           _isExecuting = false;
-          _actualOutputValue = result.stdout;
-          
-          final expected = _expectedOutputs.length > _selectedCaseIndex 
-              ? _expectedOutputs[_selectedCaseIndex] 
-              : null;
-          final isCorrect = expected != null && result.stdout.trim() == expected.trim();
-
-          if (result.code == 0) {
-            _executionOutput = isCorrect 
-                ? "✅ Accepted\n\nRuntime: ${result.time}s\nMemory: ${(result.memory / 1024).toStringAsFixed(2)} MB\n\nOutput:\n${result.stdout}"
-                : "❌ Wrong Answer\n\nExpected:\n$expected\n\nActual Output:\n${result.stdout}";
-          } else {
-            _executionOutput = "❌ ${result.stderr.isNotEmpty ? result.stderr : 'Execution Error'}\n\nStatus Code: ${result.code}";
-          }
         });
       }
     } catch (e) {
       if (mounted) {
         setState(() {
-          _executionOutput = 'Error: $e';
+          final errorResult = ExecutionResult(
+            stdout: '', stderr: 'Error: $e', output: '', code: -1
+          );
+          if (_outputs.isEmpty) {
+            _outputs = [errorResult];
+          } else {
+            _outputs[_ranCaseIndex] = errorResult;
+          }
           _isExecuting = false;
         });
       }
@@ -176,11 +274,23 @@ class _ProblemEditorScreenState extends State<ProblemEditorScreen> {
 
   void _onLanguageChanged(String? newValue) {
     if (newValue != null) {
+      final snippet = _codeSnippets.firstWhere((s) {
+         final lang = s['langSlug']?.toString().toLowerCase();
+         final search = newValue.toLowerCase() == 'c++' ? 'cpp' : newValue.toLowerCase();
+         return lang == search || lang == '${search}3';
+      }, orElse: () => null);
+
+      String newCode = _languageStubs[newValue] ?? '// Type here...';
+      if (snippet != null && snippet['code'] != null) {
+         newCode = snippet['code'];
+      }
+
       setState(() {
         _selectedLanguage = newValue;
+        _currentCode = newCode;
       });
-      _monacoKey.currentState?.setLanguage(newValue);
-      _monacoKey.currentState?.setCode(_languageStubs[newValue]!);
+      
+      _monacoKey.currentState?.setCode(newCode);
     }
   }
 
@@ -197,18 +307,25 @@ class _ProblemEditorScreenState extends State<ProblemEditorScreen> {
       appBar: AppBar(
         title: Text(widget.problem.title, style: const TextStyle(fontSize: 18)),
         actions: [
+          IconButton(
+            icon: Icon(_isBookmarked ? Icons.bookmark : Icons.bookmark_border),
+            color: _isBookmarked ? AppColors.accentBlue : AppColors.textSecondary,
+            onPressed: _toggleBookmark,
+          ),
           _buildActionItem(Icons.timer_outlined, _formatTime(_secondsElapsed), AppColors.accentBlue),
           const SizedBox(width: 24),
-          DropdownButtonHideUnderline(
-            child: DropdownButton<String>(
-              value: _selectedLanguage,
-              dropdownColor: AppColors.sidebarBackground,
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-              items: _languageStubs.keys.map((String value) => DropdownMenuItem(value: value, child: Text(value))).toList(),
-              onChanged: _onLanguageChanged,
+          if (MediaQuery.of(context).size.width >= 600) ...[
+            DropdownButtonHideUnderline(
+              child: DropdownButton<String>(
+                value: _selectedLanguage,
+                dropdownColor: AppColors.sidebarBackground,
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                items: _languageStubs.keys.map((String value) => DropdownMenuItem(value: value, child: Text(value))).toList(),
+                onChanged: _onLanguageChanged,
+              ),
             ),
-          ),
-          const SizedBox(width: 24),
+            const SizedBox(width: 24),
+          ],
           ElevatedButton(
             onPressed: () async {
               setState(() => _isTimerRunning = false);
@@ -216,19 +333,41 @@ class _ProblemEditorScreenState extends State<ProblemEditorScreen> {
               if (!context.mounted) return;
               Provider.of<UserStatsProvider>(context, listen: false).addSolvedProblem(widget.problem.title, widget.problem.difficulty);
               await FirestoreService.syncSolvedProblem(widget.problem.title, widget.problem.difficulty);
-              await FirestoreService.saveSubmission(widget.problem.title, _selectedLanguage.toLowerCase(), code);
+              await FirestoreService.saveSubmission(widget.problem.title, _selectedLanguage.toLowerCase(), code, company: widget.problem.company);
               if (!context.mounted) return;
               _showSuccessDialog();
             },
             style: ElevatedButton.styleFrom(backgroundColor: AppColors.accentGreen),
-            child: const Text('Submit', style: TextStyle(color: Colors.black)),
+            child: Text(MediaQuery.of(context).size.width < 600 ? 'Mark Done' : 'Submit', style: const TextStyle(color: Colors.black)),
           ),
           const SizedBox(width: 24),
         ],
       ),
       body: LayoutBuilder(
         builder: (context, constraints) {
+          bool isMobile = constraints.maxWidth < 600;
           bool isSmall = constraints.maxWidth < 900;
+
+          if (isMobile) {
+            return Container(
+              margin: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: AppColors.cardBackground,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: AppColors.glassBorder, width: 0.5),
+              ),
+              child: _isLoadingDetails 
+                  ? const Center(child: CircularProgressIndicator())
+                  : SingleChildScrollView(
+                      padding: const EdgeInsets.all(24),
+                      child: HtmlWidget(
+                        _fullDescription ?? "No description found.",
+                        textStyle: const TextStyle(fontSize: 16, color: Colors.white70, height: 1.5),
+                      ),
+                    ),
+            );
+          }
+
           return Row(
             children: [
               Expanded(
@@ -272,7 +411,7 @@ class _ProblemEditorScreenState extends State<ProblemEditorScreen> {
                           borderRadius: BorderRadius.circular(16),
                           child: MonacoEditor(
                             key: _monacoKey,
-                            initialCode: _languageStubs[_selectedLanguage]!,
+                            initialCode: _currentCode,
                             language: _selectedLanguage,
                           ),
                         ),
@@ -386,26 +525,7 @@ class _ProblemEditorScreenState extends State<ProblemEditorScreen> {
                                       ),
                                     ],
                                   )
-                                : Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      const Text('Execution Output', style: TextStyle(color: AppColors.textSecondary, fontSize: 11, fontWeight: FontWeight.bold)),
-                                      const SizedBox(height: 8),
-                                      Container(
-                                        width: double.infinity,
-                                        padding: const EdgeInsets.all(12),
-                                        decoration: BoxDecoration(
-                                          color: AppColors.accentGreen.withValues(alpha: 0.02),
-                                          borderRadius: BorderRadius.circular(8),
-                                          border: Border.all(color: AppColors.glassBorder, width: 0.5)
-                                        ),
-                                        child: Text(
-                                          _executionOutput.isEmpty ? 'Run your code to see results.' : _executionOutput,
-                                          style: const TextStyle(fontFamily: 'monospace', fontSize: 13, color: Colors.white),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
+                                : _buildResultTab(),
                             ),
                           ),
                         ],
@@ -418,6 +538,128 @@ class _ProblemEditorScreenState extends State<ProblemEditorScreen> {
           );
         },
       ),
+    );
+  }
+
+  Widget _buildResultTab() {
+    if (_outputs.isEmpty || _outputs.every((o) => o == null) && !_isExecuting) {
+      return const Text('Run your code to execute on all testcases.', style: TextStyle(color: AppColors.textSecondary, fontSize: 13));
+    }
+
+    int passed = 0;
+    for (int i = 0; i < _outputs.length; i++) {
+      final o = _outputs[i];
+      if (o != null && o.code == 0) {
+        final exp = _expectedOutputs.length > i ? _expectedOutputs[i] : null;
+        if (exp == null || o.stdout.trim() == exp.trim()) {
+          passed++;
+        }
+      }
+    }
+    
+    final allPassed = passed == _outputs.length;
+    final statusColor = allPassed ? AppColors.accentGreen : AppColors.accentRose;
+
+    final currentResult = _outputs.length > _ranCaseIndex ? _outputs[_ranCaseIndex] : null;
+    final expected = _expectedOutputs.length > _ranCaseIndex ? _expectedOutputs[_ranCaseIndex] : null;
+
+    return SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (_isExecuting)
+             const Text('Executing...', style: TextStyle(color: AppColors.accentBlue, fontSize: 20, fontWeight: FontWeight.bold))
+          else ...[
+             Text(
+               allPassed ? 'Accepted' : 'Wrong Answer',
+               style: TextStyle(color: statusColor, fontSize: 20, fontWeight: FontWeight.bold),
+             ),
+             const SizedBox(height: 8),
+             if (_outputs.every((o) => o != null))
+               Text('\$passed / \${_outputs.length} testcases passed', style: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 13, fontWeight: FontWeight.w500)),
+          ],
+          const SizedBox(height: 16),
+          // Case selectors row
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: List.generate(_outputs.length, (idx) {
+                final o = _outputs[idx];
+                bool isCorrect = false;
+                if (o != null && o.code == 0) {
+                   final exp = _expectedOutputs.length > idx ? _expectedOutputs[idx] : null;
+                   isCorrect = exp == null || o.stdout.trim() == exp.trim();
+                }
+                
+                return GestureDetector(
+                  onTap: () => setState(() => _ranCaseIndex = idx),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    margin: const EdgeInsets.only(right: 8),
+                    decoration: BoxDecoration(
+                      color: _ranCaseIndex == idx ? Colors.white.withValues(alpha: 0.1) : Colors.transparent,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 6, height: 6,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: o == null ? Colors.grey : (isCorrect ? AppColors.accentGreen : AppColors.accentRose),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Text('Case \${idx + 1}', style: TextStyle(color: _ranCaseIndex == idx ? Colors.white : Colors.white.withValues(alpha: 0.5), fontSize: 12, fontWeight: FontWeight.bold))
+                      ],
+                    ),
+                  ),
+                );
+              }),
+            ),
+          ),
+          const SizedBox(height: 16),
+          
+          if (currentResult == null)
+            Text('Executing case \${_ranCaseIndex + 1}...', style: TextStyle(color: Colors.white.withValues(alpha: 0.5), fontSize: 13))
+          else ...[
+            _buildResultSection('Input', _testcaseCases.length > _ranCaseIndex ? _testcaseCases[_ranCaseIndex] : _testInput),
+            const SizedBox(height: 16),
+            _buildResultSection('Output', currentResult.stdout.isEmpty ? " " : currentResult.stdout, errorColor: currentResult.code != 0),
+            if (expected != null) ...[
+              const SizedBox(height: 16),
+              _buildResultSection('Expected', expected),
+            ],
+            if (currentResult.stderr.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              _buildResultSection('Error Details', currentResult.stderr, isErrorSection: true),
+            ],
+          ]
+        ],
+      ),
+    );
+  }
+
+  Widget _buildResultSection(String title, String content, {bool errorColor = false, bool isErrorSection = false}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(title, style: TextStyle(color: isErrorSection ? AppColors.accentRose : Colors.white.withValues(alpha: 0.6), fontSize: 12, fontWeight: FontWeight.w500)),
+        const SizedBox(height: 8),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: isErrorSection ? AppColors.accentRose.withValues(alpha: 0.1) : Colors.white.withValues(alpha: 0.05),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: isErrorSection ? AppColors.accentRose.withValues(alpha: 0.2) : Colors.white.withValues(alpha: 0.05)),
+          ),
+          child: Text(
+            content,
+            style: TextStyle(fontFamily: 'monospace', fontSize: 13, color: errorColor || isErrorSection ? AppColors.accentRose : Colors.white),
+          ),
+        ),
+      ],
     );
   }
 

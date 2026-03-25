@@ -51,11 +51,80 @@ class ExecutionResult {
 class CodeExecutionService {
   static const String _judge0ApiUrl = 'https://ce.judge0.com/submissions?base64_encoded=false&wait=true';
 
+  static String _wrapCodeIfNeeded(String code, String language) {
+    final lang = language.toLowerCase();
+    final hasSolutionClass = code.contains('class Solution');
+
+    if (hasSolutionClass && (lang == 'python' || lang == 'python3')) {
+      return '''
+import sys
+import json
+from typing import *
+
+\$code
+
+if __name__ == '__main__':
+    try:
+        if 'Solution' in globals():
+            sol = Solution()
+            methods = [m for m in dir(sol) if not m.startswith('_')]
+            if methods:
+                target_method = getattr(sol, methods[0])
+                raw_input = sys.stdin.read().strip().split('\\n')
+                parsed_args = []
+                for line in raw_input:
+                    if not line.strip(): continue
+                    try:
+                        parsed_args.append(json.loads(line))
+                    except:
+                        parsed_args.append(line.strip())
+                
+                res = target_method(*parsed_args)
+                if res is not None:
+                    if isinstance(res, bool):
+                        print("true" if res else "false")
+                    else:
+                        print(json.dumps(res).replace(" ", ""))
+    except Exception as e:
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+''';
+    }
+
+    if (hasSolutionClass && (lang == 'javascript' || lang == 'nodejs')) {
+      return '''
+\$code
+
+try {
+  const fs = require('fs');
+  const input = fs.readFileSync('/dev/stdin', 'utf8').trim().split('\\n').filter(Boolean);
+  if (typeof Solution !== 'undefined') {
+    const sol = new Solution();
+    const methods = Object.getOwnPropertyNames(Object.getPrototypeOf(sol)).filter(m => m !== 'constructor');
+    if (methods.length > 0) {
+      const targetMethod = sol[methods[0]];
+      const args = input.map(line => {
+        try { return JSON.parse(line); } catch (e) { return line; }
+      });
+      const res = targetMethod.apply(sol, args);
+      if (res !== undefined) console.log(JSON.stringify(res).replace(/ /g, ''));
+    }
+  }
+} catch (e) {
+  console.error(e);
+}
+''';
+    }
+
+    return code;
+  }
+
   /// Execute code using Judge0 API.
   static Future<ExecutionResult> executeCode(String content, {String language = 'dart', String stdin = ''}) async {
     try {
+      final finalCode = _wrapCodeIfNeeded(content, language);
       final payload = {
-        'source_code': content,
+        'source_code': finalCode,
         'language_id': _getLanguageId(language),
         'stdin': stdin,
       };
